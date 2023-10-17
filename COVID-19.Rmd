@@ -1,0 +1,274 @@
+---
+title: "COVID-19 Cases and Deaths Analysis"
+date: "12-Oct-2023"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+# Introduction
+
+The COVID-19 pandemic has had a profound impact on global health, economies, and daily life. Understanding its spread and impact is crucial for policymakers, healthcare providers, and the general public. This project aims to analyze the global trends of COVID-19 cases and deaths, with a focus on daily metrics and geographical distribution.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Import the data
+
+We will be importing the essential libraries that are going to be needed for the final project.
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(caret)
+```
+
+Reading COVID-19 data for global cases, global deaths, and population from from the Johns Hopkins Github site.
+
+```{r}
+global_cases <- read_csv('https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv')
+global_deaths <- read_csv('https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_global.csv')
+population <- read_csv('https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/UID_ISO_FIPS_LookUp_Table.csv')
+```
+
+Displaying the first few rows of the datasets.
+
+```{r}
+head(global_cases)
+head(global_deaths)
+head(population)
+```
+
+## Clean the data
+
+Lets clean the data sets and take them from a wider format to a longer format.
+
+```{r}
+global_cases <- global_cases %>%
+  pivot_longer(cols = -c("Province/State", "Country/Region", "Lat", "Long"), 
+               names_to = "date", 
+               values_to = "cases") %>%
+  select(-c("Lat", "Long"))
+```
+
+```{r}
+global_deaths <- global_deaths %>%
+  pivot_longer(cols = -c("Province/State", "Country/Region", "Lat", "Long"), 
+               names_to = "date", 
+               values_to = "deaths") %>%
+  select(-c("Lat", "Long"))
+```
+
+Now we are going to join the two data sets
+
+```{r}
+global <- global_cases %>%
+  full_join(global_deaths) %>%
+  rename(Province_State = `Province/State`, Country_Region = `Country/Region`) %>%
+  mutate(date = mdy(date))
+```
+
+Now we will calculate the daily new cases
+
+```{r}
+global <- global %>%
+  arrange(Country_Region, date) %>%  
+  group_by(Country_Region) %>%  
+  mutate(daily_cases = cases - lag(cases, order_by = date),
+         daily_deaths = deaths - lag(deaths, order_by = date)) %>% 
+  ungroup()  
+```
+
+And calculate the daily new deaths
+
+```{r}
+worldwide_deaths_summary <- global %>%
+  group_by(date) %>%
+  summarise(daily_deaths = sum(daily_deaths, na.rm = TRUE), 
+            cumulative_deaths = sum(deaths, na.rm = TRUE)) %>%
+  arrange(date)
+```
+
+Now what we want to do its to add the population column from the URLS that we read from above
+
+```{r}
+global <- global %>%
+  left_join(population, by = c("Province_State", "Country_Region")) %>%
+  select(-c(UID, FIPS)) %>%
+  select(c(Province_State, Country_Region, date, cases, deaths, Population))
+```
+
+Lets see how everything looks
+
+```{r}
+str(global)
+head(global)
+```
+
+## Visualize the data, Linear Regression model, and analysis
+
+Now we will begin to visualize our data and first we will see the worldwide cumulative cases and deaths over time
+
+## Time Series
+
+### Cumulative cases over time
+
+```{r}
+ggplot(data = global, aes(x = date, y = cases)) +
+  geom_line(color = "blue") +
+  labs(title = "Actual Cases Over Time", x = "Date", y = "Cases")
+```
+
+The increasing trend in the plot of cumulative COVID-19 cases had signaled that the pandemic was a significant public health concern. This upward trajectory had indicated that community transmission was ongoing and had the potential to strain healthcare systems if not adequately managed as seen in a lot of countries around the world.
+
+### Cumulative deaths over time
+
+```{r}
+ggplot(data = global, aes(x = date, y = deaths)) +
+  geom_line(color = "red") +
+  labs(title = "Actual Deaths Over Time", x = "Date", y = "Deaths")
+```
+
+Similarly, the rising plot of cumulative COVID-19 deaths was deeply concerning, underscoring the pandemic's severe human toll. This upward trend had suggested that despite advances in treatment and vaccine distribution, the virus remained lethal and necessitated sustained public health measures to curb fatalities.
+
+```{r}
+global <- global %>%
+  arrange(Country_Region, date) %>%  # Make sure data is sorted by Country_Region and date
+  group_by(Country_Region) %>%  # Group by Country_Region
+  mutate(daily_cases = cases - lag(cases, order_by = date),
+         daily_deaths = deaths - lag(deaths, order_by = date)) %>%  # Calculate daily counts
+  ungroup()  # Remove grouping
+```
+
+Here we will compare the daily cases and deaths over time
+
+```{r}
+worldwide_daily_summary <- global %>%
+  group_by(date) %>%
+  summarise(daily_cases = sum(daily_cases, na.rm = TRUE), 
+            daily_deaths = sum(daily_deaths, na.rm = TRUE)) %>%
+  arrange(date)
+```
+
+### Daily cases and deaths worldwide
+
+```{r}
+ggplot(data = worldwide_daily_summary, aes(x = date)) +
+  geom_line(aes(y = daily_cases, color = "Daily Cases")) +
+  geom_line(aes(y = daily_deaths, color = "Daily Deaths")) +
+  labs(title = "Worldwide Daily Cases and Deaths Over Time", 
+       x = "Date", 
+       y = "Count") +
+  scale_color_manual(values = c("Daily Cases" = "blue", "Daily Deaths" = "red"))
+```
+
+The trends for daily COVID-19 cases and deaths initially showed a worrying increase, indicating heightened transmission and fatality rates. However, these trends later reversed, showing a decline in both daily cases and deaths. This downward shift could have been the result of effective public health interventions, improved treatments, or widespread vaccination. Nevertheless, the fluctuating trends emphasized the importance of sustained vigilance in managing the pandemic. Also we can see that the daily cases worldwide dwarfed the daily deaths, this means the virus was much more transmisible, than how lethal it was.
+
+### Here we will take a closer look at daily deaths over time
+
+```{r}
+ggplot(data = worldwide_deaths_summary, aes(x = date, y = daily_deaths)) +
+  geom_line(color = "red") +
+  labs(title = "Worldwide Daily Deaths Over Time", 
+       x = "Date", 
+       y = "Daily Deaths") +
+  theme_minimal()
+```
+
+## Geographical analysis
+
+In which we will be summarizing and plotting total cases and deaths by country for the top 20 countries.
+
+Top 20 Countries by Cases
+
+```{r}
+geo_summary <- global %>%
+  group_by(Country_Region) %>%
+  summarise(cases = sum(cases), deaths = sum(deaths), Population = max(Population)) %>%
+  arrange(-cases) %>%
+  head(20)
+
+ggplot(data = geo_summary, aes(x = reorder(Country_Region, -cases), y = cases, fill = Country_Region)) +
+  geom_bar(stat = 'identity') +  # Color mapped to Country_Region
+  labs(title = "Total Cases by Country (Top 20)", x = "Country", y = "Total Cases") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+Our data shows that the countries with the highest number of COVID-19 cases are the United States, India, Brazil, France, and Germany. The elevated case counts in these countries could be attributed to various factors, such as the extent of testing conducted, healthcare infrastructure, and the efficacy of public health policies.
+
+It's crucial to note that lower reported case numbers in other countries may not necessarily signify a lower prevalence of the virus. These could instead be a reflection of less comprehensive testing strategies. This highlights the complexity in interpreting COVID-19 data and emphasizes the importance of considering multiple variables for a nuanced understanding of the pandemic's impact.
+
+Top 20 Countries by Deaths
+
+```{r}
+ggplot(data = geo_summary, aes(x = reorder(Country_Region, -deaths), y = deaths, fill = Country_Region)) +
+  geom_bar(stat = 'identity') +
+  labs(title = "Total Deaths by Country (Top 20)", x = "Country", y = "Total Deaths") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+```
+
+The countries with the most recorded COVID-19 deaths are the United States, Brazil, India, Mexico, and Russia. These high mortality rates could be influenced by a myriad of factors. Firstly, the healthcare system's capacity and efficiency play a significant role in determining patient outcomes. Secondly, the total population of the country can also impact the absolute number of deaths. Other contributing factors could include the prevalence of comorbidities among the population, effectiveness of public health interventions, and timing of these interventions.
+
+It's important to consider that these numbers are not merely statistics but represent lives lost. They serve as a sobering reminder of the devastating impact of the pandemic and underline the importance of robust healthcare systems and effective public health policies.
+
+## Linear regression model
+
+Building and applying a linear model for daily cases
+
+```{r}
+worldwide_summary <- global %>%
+  group_by(date) %>%
+  summarise(daily_cases = sum(daily_cases, na.rm = TRUE), 
+            daily_deaths = sum(daily_deaths, na.rm = TRUE)) %>%
+  arrange(date)
+```
+
+```{r}
+worldwide_summary$date_ordinal <- as.numeric(difftime(worldwide_summary$date, min(worldwide_summary$date), units = "days"))
+```
+
+```{r}
+linear_model_daily_cases <- lm(daily_cases ~ date_ordinal, data = worldwide_summary)
+
+worldwide_summary$predicted_daily_cases <- predict(linear_model_daily_cases, newdata = worldwide_summary)
+```
+
+Plotting actual vs. predicted daily cases.
+
+```{r}
+ggplot() +
+  geom_line(data = worldwide_summary, aes(x = date, y = daily_cases, color = "Actual Daily Cases")) +
+  geom_line(data = worldwide_summary, aes(x = date, y = predicted_daily_cases, color = "Predicted Daily Cases")) +
+  labs(title = "Actual vs Predicted Daily Cases Over Time", x = "Date", y = "Daily Cases") +
+  scale_color_manual(values = c("Actual Daily Cases" = "blue", "Predicted Daily Cases" = "orange"))
+```
+
+The linear regression model for daily COVID-19 cases initially displayed an upward trend, signaling an increase in the rate of new infections. This rise could be attributed to various factors, such as the emergence of more transmissible variants or lapses in public health measures. The upward trajectory indicated a concerning rate of virus transmission and emphasized the need for immediate and effective interventions, including stringent public health measures and rapid vaccination campaigns, to curb the spread.
+
+Building and applying a linear model for daily deaths
+
+```{r}
+
+linear_model_daily_deaths <- lm(daily_deaths ~ date_ordinal, data = worldwide_summary)
+
+worldwide_summary$predicted_daily_deaths <- predict(linear_model_daily_deaths, newdata = worldwide_summary)
+```
+
+Building and applying a linear model for daily deaths.
+
+```{r}
+ggplot() +
+  geom_line(data = worldwide_summary, aes(x = date, y = daily_deaths, color = "Actual Daily Deaths")) +
+  geom_line(data = worldwide_summary, aes(x = date, y = predicted_daily_deaths, color = "Predicted Daily Deaths")) +
+  labs(title = "Actual vs Predicted Daily Deaths Over Time", x = "Date", y = "Daily Deaths") +
+  scale_color_manual(values = c("Actual Daily Deaths" = "red", "Predicted Daily Cases" = "orange"))
+```
+
+The linear regression model for daily COVID-19 deaths showed a downward trend, indicating a decrease in the number of fatalities over time. This encouraging decline could be the result of several contributing factors, such as improved medical treatments, effective public health interventions, or widespread vaccination campaigns. The downward trajectory suggests that efforts to manage the severity of the disease are having a positive impact, but it also underscores the need for continued vigilance to maintain this decline.
+
+# Conclusion 
+
+This analysis provided a comprehensive overview of the COVID-19 pandemic's trajectory, highlighting both cumulative and daily cases and deaths worldwide. While we observed an initial surge in both cases and deaths, there was a noticeable decline in the daily counts, suggesting the effectiveness of various mitigation strategies. The geographical analysis revealed that some countries were more affected than others, possibly due to factors like testing rates, healthcare infrastructure weather, climate, the use of a face mask, antivaxers, and many others. The linear regression models further substantiated these trends, emphasizing the continued need for vigilance and adaptive strategies to manage the pandemic effectively.
